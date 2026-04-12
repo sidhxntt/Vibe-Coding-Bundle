@@ -4,7 +4,7 @@
   "description": "A linter for your prompts — flags weak, vague, and contradictory instructions",
   "type": "module",
   "bin": {
-    "@sidhxntt/vibe-lint": "./index.js"
+    "@sidhxntt/vibe-lint": "./src/index.js"
   },
   "scripts": {
     "start": "node ./src/index.js"
