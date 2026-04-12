@@ -1,0 +1,30 @@
+{
+  "name": "@sidhxntt/token-squasher",
+  "version": "1.0.0",
+  "description": "Compress verbose system prompts into dense, token-efficient instructions without losing logic",
+  "type": "module",
+  "bin": {
+    "@sidhxntt/token-squasher": "./index.js"
+  },
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.52.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "prompt",
+    "token",
+    "compression",
+    "llm",
+    "anthropic",
+    "claude",
+    "ai"
+  ],
+  "author": "",
+  "license": "MIT"
+}

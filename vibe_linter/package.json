@@ -1,0 +1,14 @@
+{
+  "name": "@sidhxntt/vibe-lint",
+  "version": "1.0.0",
+  "description": "A linter for your prompts — flags weak, vague, and contradictory instructions",
+  "type": "module",
+  "bin": {
+    "@sidhxntt/vibe-lint": "./index.js"
+  },
+  "scripts": {
+    "start": "node ./src/index.js"
+  },
+  "keywords": ["prompt", "linter", "ai", "llm", "prompt-engineering"],
+  "license": "MIT"
+}
