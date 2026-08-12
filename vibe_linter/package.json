@@ -1,6 +1,6 @@
 {
   "name": "@sidhxntt/vibe-lint",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "A linter for your prompts — flags weak, vague, and contradictory instructions",
   "type": "module",
   "main": "src/index.js",

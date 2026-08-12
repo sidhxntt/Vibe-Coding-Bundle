@@ -551,9 +551,19 @@ export async function main(argv = process.argv.slice(2)) {
   return 0;
 }
 
+function realpathOrSelf(p) {
+  try {
+    return fs.realpathSync(path.resolve(p));
+  } catch {
+    return path.resolve(p);
+  }
+}
+
 const invokedDirectly =
   process.argv[1] &&
-  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+  // realpath both sides: npm installs bin as a symlink into node_modules/.bin,
+  // so process.argv[1] is the link while import.meta.url is the real file.
+  realpathOrSelf(process.argv[1]) === realpathOrSelf(fileURLToPath(import.meta.url));
 
 if (invokedDirectly) {
   main().then(
