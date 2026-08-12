@@ -1,9 +1,36 @@
 #!/usr/bin/env node
 
-import readline from "readline";
+import readline from "node:readline";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import {
+  analyzePrompt,
+  scorePrompt,
+  summarize,
+} from "@sidhxntt/prompt-rules";
+
+const pkg = JSON.parse(
+  fs.readFileSync(new URL("./package.json", import.meta.url), "utf8")
+);
+export const VERSION = pkg.version;
+
+// ─── Defaults ─────────────────────────────────────────────────────────────────
+export const DEFAULT_MODEL = "claude-sonnet-5";
+/** Low, not zero: rewrites should be reproducible run to run. */
+export const DEFAULT_TEMPERATURE = 0.2;
+export const DEFAULT_TIMEOUT_MS = 60_000;
+export const DEFAULT_RETRIES = 2;
+const API_URL = "https://api.anthropic.com/v1/messages";
 
 // ─── ANSI Colors ──────────────────────────────────────────────────────────────
-const c = {
+const COLOR_ENABLED =
+  !process.env.NO_COLOR &&
+  process.env.TERM !== "dumb" &&
+  Boolean(process.stdout.isTTY);
+
+const RAW = {
   reset: "\x1b[0m",
   bold: "\x1b[1m",
   dim: "\x1b[2m",
@@ -13,200 +40,29 @@ const c = {
   cyan: "\x1b[38;5;117m",
   magenta: "\x1b[38;5;213m",
   gray: "\x1b[38;5;245m",
-  white: "\x1b[97m",
 };
 
-const bold    = (s) => `${c.bold}${s}${c.reset}`;
-const dim     = (s) => `${c.dim}${s}${c.reset}`;
-const red     = (s) => `${c.red}${s}${c.reset}`;
-const yellow  = (s) => `${c.yellow}${s}${c.reset}`;
-const green   = (s) => `${c.green}${s}${c.reset}`;
-const cyan    = (s) => `${c.cyan}${s}${c.reset}`;
-const magenta = (s) => `${c.magenta}${s}${c.reset}`;
-const gray    = (s) => `${c.gray}${s}${c.reset}`;
+const c = Object.fromEntries(
+  Object.keys(RAW).map((k) => [k, COLOR_ENABLED ? RAW[k] : ""])
+);
 
-// ─── Rules (same as vibe-lint) ────────────────────────────────────────────────
-const RULES = [
-  {
-    id: "W001", severity: "warn", category: "vague-quality",
-    pattern: /\b(make it better|improve (it|this|the code|the output))\b/gi,
-    message: 'Vague improvement request — "better" is unmeasurable',
-    suggestions: [
-      "Specify the axis: 'reduce cyclomatic complexity below 10'",
-      "Target a metric: 'cut response latency by 30%'",
-      "Name the smell: 'eliminate magic numbers, extract named constants'",
-    ],
-  },
-  {
-    id: "W002", severity: "warn", category: "vague-quality",
-    pattern: /\b(be (more )?(helpful|useful|good|better|clearer|concise))\b/gi,
-    message: '"Be helpful/useful/good" gives the model no optimization target',
-    suggestions: [
-      "'Answer in ≤3 sentences unless the topic requires more depth'",
-      "'If unsure, list 2 options with trade-offs rather than picking one'",
-      "'Prefer code examples over prose explanations for how-to questions'",
-    ],
-  },
-  {
-    id: "W003", severity: "warn", category: "vague-quality",
-    pattern: /\b(high[- ]quality|professional|polished|nice|clean)\b/gi,
-    message: '"High-quality/professional" is subjective without a rubric',
-    suggestions: [
-      "For code: 'passes ESLint strict, has JSDoc on public functions, no TODOs'",
-      "For prose: 'Flesch-Kincaid grade ≤ 10, active voice, no filler phrases'",
-      "For UI: 'WCAG AA contrast, touch targets ≥ 44px, no layout shift'",
-    ],
-  },
-  {
-    id: "E001", severity: "error", category: "ambiguous-scope",
-    pattern: /\b(do (the|your) (best|thing)|handle (it|this|everything))\b/gi,
-    message: "Ambiguous delegation — model will hallucinate scope boundaries",
-    suggestions: [
-      "List exact subtasks: '1. Parse input 2. Validate schema 3. Return JSON'",
-      "Set a ceiling: 'Only modify files in /src/components, leave tests untouched'",
-      "Define done: 'Complete when all existing tests pass with no new warnings'",
-    ],
-  },
-  {
-    id: "E002", severity: "error", category: "ambiguous-scope",
-    pattern: /\b(as needed|where (appropriate|necessary)|if (applicable|needed|relevant))\b/gi,
-    message: "Conditional hedges let the model decide scope — it will decide wrong",
-    suggestions: [
-      "Replace with explicit conditions: 'Add error handling if the function throws'",
-      "Use always/never: 'Always add type annotations. Never use `any`.'",
-      "Enumerate the cases: 'Add comments above functions longer than 20 lines'",
-    ],
-  },
-  {
-    id: "W004", severity: "warn", category: "output-format",
-    pattern: /\b(in (a |an )?(good|nice|clear|readable|proper) format)\b/gi,
-    message: '"Good format" is ambiguous — specify the exact structure',
-    suggestions: [
-      "'Return a JSON object: { summary: string, tags: string[], confidence: 0-1 }'",
-      "'Use markdown with H2 sections: Overview, Usage, Examples, Caveats'",
-    ],
-  },
-  {
-    id: "W005", severity: "warn", category: "output-format",
-    pattern: /\b(respond (appropriately|accordingly|as you see fit))\b/gi,
-    message: "Deferred format decision will produce inconsistent outputs",
-    suggestions: [
-      "Specify mime type: 'Respond with application/json'",
-      "Give a template: 'Use this structure: [ANALYSIS]\\n[CODE]\\n[CAVEATS]'",
-    ],
-  },
-  {
-    id: "E003", severity: "error", category: "role-confusion",
-    pattern: /\b(you (are|will be) an? (AI|assistant|language model|LLM|bot))\b/gi,
-    message: "Restating model identity wastes tokens and adds no behavioral constraint",
-    suggestions: [
-      "Replace with a domain expert persona: 'You are a senior Rust compiler engineer'",
-      "Or a constraint: 'You have access only to information in the provided context'",
-    ],
-  },
-  {
-    id: "W006", severity: "warn", category: "role-confusion",
-    pattern: /\b(act (as|like) (a |an )?(helpful|smart|intelligent|knowledgeable) (AI|assistant))\b/gi,
-    message: '"Act as a helpful assistant" adds noise, not signal',
-    suggestions: [
-      "'Act as a PostgreSQL performance consultant reviewing slow queries'",
-      "'Act as a skeptical code reviewer who prioritizes security over brevity'",
-    ],
-  },
-  {
-    id: "E004", severity: "error", category: "contradiction",
-    pattern: /\b(be (brief|concise|short)).{0,120}(be (comprehensive|thorough|detailed|exhaustive))\b/gis,
-    message: "Contradictory length constraints — model will average them badly",
-    suggestions: [
-      "Pick one and qualify the other: 'Be concise. Expand only on error handling.'",
-      "Use section-level rules: 'Summary: 1 sentence. Implementation: as long as needed.'",
-    ],
-  },
-  {
-    id: "W008", severity: "warn", category: "politeness-bloat",
-    pattern: /\b(please (please )?(try to |attempt to |do your best to )?|kindly|feel free to|don't hesitate to)\b/gi,
-    message: "Politeness tokens consume context budget and dilute instruction weight",
-    suggestions: [
-      "Drop courtesy words entirely — models don't have feelings",
-      "Convert to imperative: 'Return X' not 'Please try to return X'",
-    ],
-  },
-  {
-    id: "W009", severity: "warn", category: "negation-only",
-    pattern: /\b(don't (be|use|include|add|make|write|do|say)|avoid being|never (be|sound))\b/gi,
-    message: "Negation-only rules are weak — models anchor on the forbidden concept",
-    suggestions: [
-      "Pair every DON'T with a DO: 'Don't use passive voice → use active constructions'",
-      "Positive constraint: 'Use direct assertions' instead of 'Don't be wishy-washy'",
-    ],
-  },
-  {
-    id: "E005", severity: "error", category: "missing-context",
-    pattern: /\b(the (code|file|document|data|text|above|previous|earlier))\b(?![\s\S]*?```)/gi,
-    message: "Reference to context not present in the prompt — model will hallucinate",
-    suggestions: [
-      "Paste the actual code/data inline in a fenced block",
-      "Use explicit variable names: define it earlier in the prompt",
-    ],
-  },
-  {
-    id: "W010", severity: "warn", category: "no-success-criteria",
-    pattern: /\b(until (it('s| is) (good|right|working|correct|done))|when (you('re| are) happy|satisfied|done))\b/gi,
-    message: "Subjective termination condition — model can't self-evaluate accurately",
-    suggestions: [
-      "Objective criterion: 'Stop when all 5 test cases produce correct output'",
-      "Countable: 'Generate exactly 10 variants, ranked by estimated click-through'",
-    ],
-  },
-  {
-    id: "I001", severity: "info", category: "chain-of-thought",
-    pattern: /\b(answer (this|the question|directly)|just (give|tell|show) (me|us) (the )?(answer|result|output))\b/gi,
-    message: "Skipping reasoning may reduce accuracy on complex tasks",
-    suggestions: [
-      "Add: 'Think step by step before giving the final answer'",
-      "Use scratchpad: 'Reason in <thinking> tags, then output in <answer> tags'",
-    ],
-  },
-  {
-    id: "W011", severity: "warn", category: "vague-persona",
-    pattern: /\b(expert|specialist|professional|guru|master|wizard|ninja)\b(?! in| at| of| with)/gi,
-    message: 'Bare "expert" persona lacks domain specificity',
-    suggestions: [
-      "'Expert' → 'Staff engineer with 10yr distributed systems experience'",
-      "Add the skepticism level: 'Expert who defaults to the simplest solution'",
-    ],
-  },
-];
+const paint = (code) => (s) => (COLOR_ENABLED ? `${code}${s}${RAW.reset}` : String(s));
+const bold    = paint(RAW.bold);
+const dim     = paint(RAW.dim);
+const red     = paint(RAW.red);
+const yellow  = paint(RAW.yellow);
+const green   = paint(RAW.green);
+const cyan    = paint(RAW.cyan);
+const magenta = paint(RAW.magenta);
+const gray    = paint(RAW.gray);
 
-function analyzePrompt(text) {
-  const findings = [];
-  for (const rule of RULES) {
-    const regex = new RegExp(rule.pattern.source, rule.pattern.flags);
-    let match;
-    while ((match = regex.exec(text)) !== null) {
-      const lineNum = text.slice(0, match.index).split("\n").length;
-      const colNum  = match.index - text.lastIndexOf("\n", match.index - 1);
-      findings.push({ rule, match: match[0], index: match.index, line: lineNum, col: colNum });
-    }
-  }
-  const seen = new Set();
-  return findings.filter((f) => {
-    const key = `${f.rule.id}:${f.line}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
+const clearScreen = () => {
+  if (COLOR_ENABLED) console.clear();
+};
 
-function scorePrompt(findings) {
-  const errors = findings.filter((f) => f.rule.severity === "error").length;
-  const warns  = findings.filter((f) => f.rule.severity === "warn").length;
-  const infos  = findings.filter((f) => f.rule.severity === "info").length;
-  return Math.max(0, 100 - errors * 20 - warns * 8 - infos * 2);
-}
-
+// ─── Score rendering ──────────────────────────────────────────────────────────
 function renderScoreBar(score) {
-  const filled = Math.round(score / 5);
+  const filled = Math.max(0, Math.min(20, Math.round(score / 5)));
   const empty  = 20 - filled;
   const col    = score >= 80 ? c.green : score >= 50 ? c.yellow : c.red;
   return gray("[") + col + "█".repeat(filled) + c.reset + gray("░".repeat(empty)) + gray("]");
@@ -219,6 +75,10 @@ function scoreLabel(score) {
 
 // ─── Spinner ──────────────────────────────────────────────────────────────────
 function makeSpinner(msg) {
+  if (!COLOR_ENABLED) {
+    console.log(`  ${msg}`);
+    return { stop: () => {} };
+  }
   const frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
   let i = 0;
   const timer = setInterval(() => {
@@ -227,31 +87,88 @@ function makeSpinner(msg) {
   return { stop: () => { clearInterval(timer); process.stdout.write("\r\x1b[2K"); } };
 }
 
-// ─── API call ─────────────────────────────────────────────────────────────────
-async function optimizeWithClaude(prompt, findings) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
+// ─── Privacy notice ───────────────────────────────────────────────────────────
+let noticeShown = false;
+
+export function resetNotice() {
+  noticeShown = false;
+}
+
+function printApiNotice() {
+  if (noticeShown || process.env.VIBE_NO_API_NOTICE) return;
+  noticeShown = true;
+  console.log(
+    `  ${yellow("⚠")}  ${bold("Your prompt is sent verbatim to the Anthropic API.")}`
+  );
+  console.log(
+    `     ${dim("Nothing is redacted. Do not paste API keys, credentials, customer data,")}`
+  );
+  console.log(
+    `     ${dim("or anything else you would not put in a third-party request body.")}`
+  );
+  console.log(`     ${dim("Silence this notice with")} ${cyan("VIBE_NO_API_NOTICE=1")}`);
+  console.log();
+}
+
+// ─── API error handling ───────────────────────────────────────────────────────
+
+/**
+ * Build an error message from a non-2xx response body.
+ * The 1.0.0 code did `JSON.parse(err)?.error?.message || err` inside the throw,
+ * so a non-JSON body (a 503 HTML page from a proxy, an empty gateway response)
+ * threw a SyntaxError from inside the throw expression and replaced the real
+ * API error with `Unexpected token '<'`.
+ */
+export function apiErrorMessage(status, body) {
+  let detail = body;
+  try {
+    const parsed = JSON.parse(body);
+    detail = parsed?.error?.message ?? body;
+  } catch {
+    // Body was not JSON. Keep the raw text — it is still the best diagnostic.
+  }
+  detail = String(detail ?? "").replace(/\s+/g, " ").trim();
+  if (detail.length > 300) detail = detail.slice(0, 300) + "…";
+  return `API ${status}: ${detail || "(empty response body)"}`;
+}
+
+/** Extract the assistant text, guarding refusals and empty content arrays. */
+export function extractText(data) {
+  if (!data || !Array.isArray(data.content)) {
     throw new Error(
-      "ANTHROPIC_API_KEY not set.\n  " +
-      dim("Fix: ") + cyan("export ANTHROPIC_API_KEY=sk-ant-...") +
-      "\n  Then restart the tool."
+      "API response had no content array — nothing was rewritten. " +
+        `Received: ${JSON.stringify(data ?? null).slice(0, 200)}`
     );
   }
+  const text = data.content
+    .filter((b) => b && b.type === "text" && typeof b.text === "string")
+    .map((b) => b.text)
+    .join("")
+    .trim();
 
-  const issueList = findings.map((f) =>
-    `- [${f.rule.id}] ${f.rule.severity.toUpperCase()}: "${f.match}" — ${f.rule.message}\n  Suggestions: ${f.rule.suggestions.join(" | ")}`
-  ).join("\n");
+  if (!text) {
+    const reason = data.stop_reason ? ` (stop_reason: ${data.stop_reason})` : "";
+    throw new Error(
+      `Claude returned no text${reason} — the request was likely refused. Your prompt is unchanged.`
+    );
+  }
+  return text;
+}
 
-  const systemPrompt = `You are an expert prompt engineer. Your task is to rewrite user-provided LLM prompts to fix specific flagged issues and make them maximally effective.
+const RETRYABLE = new Set([408, 409, 429, 500, 502, 503, 504, 529]);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+export const SYSTEM_PROMPT = `You are an expert prompt engineer. Your task is to rewrite user-provided LLM prompts to fix specific flagged issues and make them maximally effective.
 
 You will receive:
 1. The original prompt
-2. A list of flagged issues with rule IDs and suggested fixes
+2. A list of flagged issues with rule IDs and suggested fixes (the list may be empty)
 
 Your job is to output ONLY the rewritten prompt — no preamble, no explanation, no markdown wrapper, no "Here is the optimized prompt:" lead-in. Just the raw rewritten prompt text.
 
 Rules for rewriting:
 - Fix every flagged issue using the suggestions as guidance
+- If no issues were flagged, still tighten the prompt: sharpen vague instructions, add missing success criteria, and make the output contract explicit
 - Preserve the original intent and domain completely
 - Replace vague language with concrete, measurable instructions
 - Replace identity statements ("you are an AI") with domain expert personas
@@ -262,30 +179,141 @@ Rules for rewriting:
 - Do not add new requirements the original didn't imply
 - Preserve any technical specifics, code references, or domain terms verbatim`;
 
-  const userMessage = `Original prompt:\n"""\n${prompt}\n"""\n\nFlagged issues to fix:\n${issueList}\n\nRewrite the prompt to fix all issues above.`;
+export function buildIssueList(findings) {
+  if (findings.length === 0) {
+    return "(none — no rule fired. Tighten the prompt on general principles.)";
+  }
+  return findings
+    .map(
+      (f) =>
+        `- [${f.rule.id}] ${f.rule.severity.toUpperCase()}: "${f.match}" — ${f.rule.message}\n  Suggestions: ${f.rule.suggestions.join(" | ")}`
+    )
+    .join("\n");
+}
 
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1000,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userMessage }],
-    }),
-  });
+/**
+ * Call Claude. Bounded retry with exponential backoff, a hard per-attempt
+ * timeout via AbortSignal, and a fixed low temperature for reproducibility.
+ */
+export async function optimizeWithClaude(prompt, findings, opts = {}) {
+  const {
+    model = DEFAULT_MODEL,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    retries = DEFAULT_RETRIES,
+    temperature = DEFAULT_TEMPERATURE,
+    apiKey = process.env.ANTHROPIC_API_KEY,
+    fetchImpl = globalThis.fetch,
+    onRetry = () => {},
+  } = opts;
 
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`API ${response.status}: ${JSON.parse(err)?.error?.message || err}`);
+  if (!apiKey) {
+    throw new Error(
+      "ANTHROPIC_API_KEY not set.\n  " +
+        dim("Fix: ") +
+        cyan("export ANTHROPIC_API_KEY=sk-ant-...") +
+        "\n  Then restart the tool."
+    );
   }
 
-  const data = await response.json();
-  return data.content.filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+  const body = JSON.stringify({
+    model,
+    max_tokens: 1000,
+    temperature,
+    system: SYSTEM_PROMPT,
+    messages: [
+      {
+        role: "user",
+        content:
+          `Original prompt:\n"""\n${prompt}\n"""\n\n` +
+          `Flagged issues to fix:\n${buildIssueList(findings)}\n\n` +
+          `Rewrite the prompt to fix all issues above.`,
+      },
+    ],
+  });
+
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    if (attempt > 0) {
+      const backoff = Math.min(8000, 500 * 2 ** (attempt - 1)) + Math.random() * 250;
+      onRetry(attempt, Math.round(backoff), lastError);
+      await sleep(backoff);
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await fetchImpl(API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body,
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        const err = new Error(apiErrorMessage(response.status, text));
+        err.status = response.status;
+        if (RETRYABLE.has(response.status) && attempt < retries) {
+          lastError = err;
+          continue;
+        }
+        throw err;
+      }
+
+      return extractText(await response.json());
+    } catch (err) {
+      const isAbort = err?.name === "AbortError";
+      const isNetwork = err instanceof TypeError || err?.name === "FetchError";
+      const wrapped = isAbort
+        ? new Error(`request timed out after ${timeoutMs}ms`)
+        : err;
+
+      if ((isAbort || isNetwork) && attempt < retries) {
+        lastError = wrapped;
+        continue;
+      }
+      throw wrapped;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  throw lastError ?? new Error("request failed after all retries");
+}
+
+// ─── Finding diff ─────────────────────────────────────────────────────────────
+
+/**
+ * Compare two finding sets by rule id. The 1.0.0 code printed
+ * `findings.length - newFindings.length` as "N issues fixed" in green, which
+ * went negative whenever the rewrite tripped a new rule.
+ */
+export function diffFindings(before, after) {
+  const countBy = (list) => {
+    const m = new Map();
+    for (const f of list) m.set(f.rule.id, (m.get(f.rule.id) ?? 0) + 1);
+    return m;
+  };
+  const b = countBy(before);
+  const a = countBy(after);
+
+  const resolved = [];
+  const remaining = [];
+  for (const id of b.keys()) {
+    if ((a.get(id) ?? 0) === 0) resolved.push(id);
+    else remaining.push(id);
+  }
+  const introduced = [...a.keys()].filter((id) => !b.has(id));
+
+  resolved.sort();
+  remaining.sort();
+  introduced.sort();
+  return { resolved, remaining, introduced };
 }
 
 // ─── Render ───────────────────────────────────────────────────────────────────
@@ -293,71 +321,306 @@ function renderIssuesSummary(findings) {
   const icons = { error: red("✖"), warn: yellow("⚠"), info: cyan("ℹ") };
 
   if (findings.length === 0) {
-    console.log(`  ${green("✔")} ${bold("Prompt looks clean")} — nothing to optimize.\n`);
+    console.log(
+      `  ${green("✔")} ${bold("No rule fired")} — the regex engine found nothing to flag.`
+    );
     return false;
   }
 
   console.log(`  ${bold("Issues detected:")}`);
   for (const f of findings) {
-    console.log(`    ${icons[f.rule.severity]} ${gray(`[${f.rule.id}]`)} ${gray(`"${f.match}"`)}  ${dim(f.rule.message)}`);
+    console.log(
+      `    ${icons[f.rule.severity]} ${gray(`[${f.rule.id}]`)} ${gray(`"${f.match}"`)}  ${dim(f.rule.message)}`
+    );
   }
 
-  const errors = findings.filter((f) => f.rule.severity === "error").length;
-  const warns  = findings.filter((f) => f.rule.severity === "warn").length;
-  const infos  = findings.filter((f) => f.rule.severity === "info").length;
-  const parts  = [];
-  if (errors) parts.push(red(`${errors} error${errors !== 1 ? "s" : ""}`));
-  if (warns)  parts.push(yellow(`${warns} warning${warns !== 1 ? "s" : ""}`));
-  if (infos)  parts.push(cyan(`${infos} hint${infos !== 1 ? "s" : ""}`));
+  const { errors, warnings, hints } = summarize(findings);
+  const parts = [];
+  if (errors)   parts.push(red(`${errors} error${errors !== 1 ? "s" : ""}`));
+  if (warnings) parts.push(yellow(`${warnings} warning${warnings !== 1 ? "s" : ""}`));
+  if (hints)    parts.push(cyan(`${hints} hint${hints !== 1 ? "s" : ""}`));
   console.log(`\n  ${parts.join(gray("  │  "))}`);
   return true;
 }
 
 function renderDiff(original, optimized) {
   console.log(`\n  ${bold(red("─── before ─────────────────────────────────────────────"))}`);
-  for (const line of original.split("\n")) {
-    console.log(`  ${red("−")} ${dim(line)}`);
-  }
+  for (const line of original.split("\n")) console.log(`  ${red("−")} ${dim(line)}`);
   console.log(`\n  ${bold(green("─── after ──────────────────────────────────────────────"))}`);
-  for (const line of optimized.split("\n")) {
-    console.log(`  ${green("+")} ${line}`);
-  }
+  for (const line of optimized.split("\n")) console.log(`  ${green("+")} ${line}`);
 }
 
 function renderScoreComparison(before, after) {
   const arrow = after > before ? green("↑") : after < before ? red("↓") : gray("→");
   console.log(
     `\n  ${bold("Score:")}  ` +
-    `${scoreLabel(before)} ${renderScoreBar(before)}  ${dim("before")}` +
-    `\n          ` +
-    `${scoreLabel(after)}  ${renderScoreBar(after)}  ${arrow} ${dim("after")}`
+      `${scoreLabel(before)} ${renderScoreBar(before)}  ${dim("before")}` +
+      `\n          ` +
+      `${scoreLabel(after)}  ${renderScoreBar(after)}  ${arrow} ${dim("after")}`
   );
 }
 
-// ─── REPL ─────────────────────────────────────────────────────────────────────
-function printWelcome() {
-  console.clear();
+function renderOutcome({ resolved, remaining, introduced }) {
   console.log();
-  console.log(`  ${bold(cyan("prompt-optimizer"))} ${gray("v1.0.0")}`);
-  console.log(`  ${gray("Rewrites weak prompts using vibe-lint rules + Claude")}`);
-  console.log();
-
-  const hasKey = !!process.env.ANTHROPIC_API_KEY;
-  if (hasKey) {
-    console.log(`  ${green("✔")} ${dim("ANTHROPIC_API_KEY detected")}`);
+  if (resolved.length > 0) {
+    console.log(
+      `  ${green("✔")} ${bold(green(`resolved (${resolved.length}):`))} ${resolved.join(", ")}`
+    );
   } else {
-    console.log(`  ${red("✖")} ${bold("ANTHROPIC_API_KEY not set")}  ${dim("→")}  ${cyan("export ANTHROPIC_API_KEY=sk-ant-...")}`);
+    console.log(`  ${yellow("⚠")} ${bold(yellow("resolved (0):"))} ${dim("no rule was cleared")}`);
+  }
+  if (remaining.length > 0) {
+    console.log(
+      `  ${yellow("·")} ${yellow(`still present (${remaining.length}):`)} ${remaining.join(", ")} ${dim("(needs manual context)")}`
+    );
+  }
+  if (introduced.length > 0) {
+    console.log(
+      `  ${red("✖")} ${bold(red(`introduced (${introduced.length}):`))} ${introduced.join(", ")} ${dim("(the rewrite is worse here)")}`
+    );
+  }
+  if (remaining.length === 0 && introduced.length === 0) {
+    console.log(`  ${green("·")} ${green("prompt is clean")}`);
+  }
+}
+
+// ─── One optimization pass ────────────────────────────────────────────────────
+
+async function optimizeSource(source, opts, { label = null, spinner = true } = {}) {
+  const findings = analyzePrompt(source);
+  const beforeScore = scorePrompt(findings, source);
+
+  if (label) {
+    console.log(`\n  ${bold(cyan(label))}`);
+  }
+  const hasIssues = renderIssuesSummary(findings);
+
+  if (!hasIssues && !opts.force) {
+    console.log(
+      `  ${dim("Nothing to fix by rule. Re-run with")} ${cyan("--force")} ${dim("(or type")} ${cyan(":force")} ${dim("in the REPL) to optimize anyway.")}`
+    );
+    return { skipped: true, findings, beforeScore };
   }
 
   console.log();
+  printApiNotice();
+
+  const spin = spinner ? makeSpinner(`Optimizing with ${opts.model}…`) : { stop: () => {} };
+  let optimized;
+  try {
+    optimized = await optimizeWithClaude(source, findings, {
+      model: opts.model,
+      timeoutMs: opts.timeoutMs,
+      retries: opts.retries,
+      onRetry: (attempt, backoff, err) => {
+        spin.stop();
+        console.log(
+          `  ${yellow("↻")} ${dim(`attempt ${attempt + 1}/${opts.retries + 1} after ${backoff}ms`)} ${gray(err ? `(${err.message})` : "")}`
+        );
+      },
+    });
+  } catch (err) {
+    spin.stop();
+    console.log(`  ${red("✖")} ${err.message}\n`);
+    return { failed: true, error: err, findings, beforeScore };
+  }
+  spin.stop();
+
+  const newFindings = analyzePrompt(optimized);
+  const afterScore = scorePrompt(newFindings, optimized);
+
+  renderDiff(source, optimized);
+  renderScoreComparison(beforeScore, afterScore);
+  renderOutcome(diffFindings(findings, newFindings));
+  console.log();
+
+  return {
+    optimized,
+    findings,
+    newFindings,
+    beforeScore,
+    afterScore,
+    diff: diffFindings(findings, newFindings),
+  };
+}
+
+// ─── CLI ──────────────────────────────────────────────────────────────────────
+
+const HELP = `
+  prompt-optimizer v${VERSION} — rewrites weak prompts using vibe-lint rules + Claude
+
+  USAGE
+    prompt-optimizer [options] [file ...]
+    cat prompt.txt | prompt-optimizer [options]
+    prompt-optimizer                    (no files, TTY stdin → interactive REPL)
+
+  OPTIONS
+    -h, --help            Show this help and exit
+    -v, --version         Print the version and exit
+        --model <id>      Claude model to use (default: ${DEFAULT_MODEL})
+        --force           Optimize even when no rule fires
+        --timeout <ms>    Per-attempt request timeout (default: ${DEFAULT_TIMEOUT_MS})
+        --retries <n>     Retries after a timeout / 429 / 5xx (default: ${DEFAULT_RETRIES})
+        --json            Emit a JSON report instead of the coloured diff
+        --                Treat all remaining arguments as file paths
+
+  ENVIRONMENT
+    ANTHROPIC_API_KEY     Required.
+    VIBE_NO_API_NOTICE    Set to any value to silence the "prompt is sent to the
+                          API" first-run notice.
+
+  DETERMINISM
+    Requests are sent with temperature ${DEFAULT_TEMPERATURE}. Rewrites are near-deterministic
+    run to run, but the API makes no exact-reproducibility guarantee.
+
+  EXIT CODES
+    0  every input was optimized (or skipped as clean)
+    1  at least one optimization failed
+    2  usage error or unreadable file
+`;
+
+export function parseArgs(argv) {
+  const opts = {
+    help: false,
+    version: false,
+    force: false,
+    json: false,
+    model: DEFAULT_MODEL,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+    retries: DEFAULT_RETRIES,
+    files: [],
+    error: null,
+  };
+
+  const intArg = (name, raw, min = 0) => {
+    const n = Number(raw);
+    if (raw === undefined || !Number.isInteger(n) || n < min) {
+      opts.error = `${name} expects an integer >= ${min}, got ${
+        raw === undefined ? "nothing" : `"${raw}"`
+      }`;
+      return null;
+    }
+    return n;
+  };
+
+  let literal = false;
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (literal) { opts.files.push(arg); continue; }
+
+    switch (arg) {
+      case "--": literal = true; break;
+      case "-h": case "--help": opts.help = true; break;
+      case "-v": case "--version": opts.version = true; break;
+      case "--force": case "-f": opts.force = true; break;
+      case "--json": opts.json = true; break;
+      case "--model": {
+        const value = argv[++i];
+        if (!value || value.startsWith("-")) opts.error = "--model expects a model id";
+        else opts.model = value;
+        break;
+      }
+      case "--timeout": {
+        const n = intArg("--timeout", argv[++i], 1);
+        if (n !== null) opts.timeoutMs = n;
+        break;
+      }
+      case "--retries": {
+        const n = intArg("--retries", argv[++i], 0);
+        if (n !== null) opts.retries = n;
+        break;
+      }
+      default:
+        if (arg.startsWith("--model=")) opts.model = arg.slice(8);
+        else if (arg.startsWith("--timeout=")) {
+          const n = intArg("--timeout", arg.slice(10), 1);
+          if (n !== null) opts.timeoutMs = n;
+        } else if (arg.startsWith("--retries=")) {
+          const n = intArg("--retries", arg.slice(10), 0);
+          if (n !== null) opts.retries = n;
+        } else if (arg.startsWith("-") && arg !== "-") {
+          opts.error = `unknown option: ${arg}`;
+        } else {
+          opts.files.push(arg);
+        }
+    }
+  }
+
+  return opts;
+}
+
+function readStdin() {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => (data += chunk));
+    process.stdin.on("end", () => resolve(data));
+    process.stdin.on("error", reject);
+  });
+}
+
+async function runBatch(inputs, opts) {
+  let failed = false;
+  const reports = [];
+
+  for (const input of inputs) {
+    const result = await optimizeSource(input.text, opts, {
+      label: input.name,
+      spinner: !opts.json,
+    });
+    if (result.failed) failed = true;
+
+    if (opts.json) {
+      reports.push({
+        file: input.name,
+        model: opts.model,
+        skipped: Boolean(result.skipped),
+        error: result.failed ? result.error.message : null,
+        score: { before: result.beforeScore ?? null, after: result.afterScore ?? null },
+        resolved: result.diff?.resolved ?? [],
+        remaining: result.diff?.remaining ?? [],
+        introduced: result.diff?.introduced ?? [],
+        original: input.text,
+        optimized: result.optimized ?? null,
+      });
+    }
+  }
+
+  if (opts.json) {
+    console.log(JSON.stringify(reports.length === 1 ? reports[0] : reports, null, 2));
+  }
+  return failed ? 1 : 0;
+}
+
+// ─── REPL ─────────────────────────────────────────────────────────────────────
+
+function printWelcome(opts) {
+  clearScreen();
+  console.log();
+  console.log(`  ${bold(cyan("prompt-optimizer"))} ${gray("v" + VERSION)}`);
+  console.log(`  ${gray("Rewrites weak prompts using vibe-lint rules + Claude")}`);
+  console.log();
+
+  if (process.env.ANTHROPIC_API_KEY) {
+    console.log(`  ${green("✔")} ${dim("ANTHROPIC_API_KEY detected")}`);
+  } else {
+    console.log(
+      `  ${red("✖")} ${bold("ANTHROPIC_API_KEY not set")}  ${dim("→")}  ${cyan("export ANTHROPIC_API_KEY=sk-ant-...")}`
+    );
+  }
+  console.log(`  ${dim("model:")} ${cyan(opts.model)}  ${dim("temperature:")} ${cyan(DEFAULT_TEMPERATURE)}`);
+
+  console.log();
   console.log(`  ${dim("Paste your prompt and press")} ${bold("Enter twice")} ${dim("to optimize it.")}`);
-  console.log(`  ${dim("Commands:")} ${cyan(":clear")} ${dim("clear screen")}  ${cyan(":quit")} ${dim("or Ctrl+C to exit")}`);
+  console.log(
+    `  ${dim("Commands:")} ${cyan(":force")} ${dim("optimize the last clean prompt anyway")}  ${cyan(":clear")} ${dim("clear screen")}  ${cyan(":quit")} ${dim("exit")}`
+  );
   console.log(`  ${dim("─".repeat(58))}`);
   console.log();
 }
 
-async function runRepl() {
-  printWelcome();
+async function runRepl(opts) {
+  printWelcome(opts);
 
   const rl = readline.createInterface({
     input: process.stdin,
@@ -367,61 +630,7 @@ async function runRepl() {
   });
 
   let buffer = [];
-
-  const flush = async () => {
-    const source = buffer.join("\n").trim();
-    buffer = [];
-    if (!source) return;
-
-    if (source === ":quit" || source === ":q") {
-      console.log(`\n  ${gray("bye.\n")}`);
-      process.exit(0);
-    }
-    if (source === ":clear") { printWelcome(); promptNext(); return; }
-
-    const findings    = analyzePrompt(source);
-    const beforeScore = scorePrompt(findings);
-
-    console.log();
-    console.log(`  ${dim("─".repeat(58))}`);
-    const hasIssues = renderIssuesSummary(findings);
-
-    if (!hasIssues) {
-      promptNext();
-      return;
-    }
-
-    console.log();
-    const spin = makeSpinner("Optimizing with Claude…");
-    let optimized;
-    try {
-      optimized = await optimizeWithClaude(source, findings);
-    } catch (err) {
-      spin.stop();
-      console.log(`  ${red("✖")} ${err.message}\n`);
-      promptNext();
-      return;
-    }
-    spin.stop();
-
-    const newFindings = analyzePrompt(optimized);
-    const afterScore  = scorePrompt(newFindings);
-
-    renderDiff(source, optimized);
-    renderScoreComparison(beforeScore, afterScore);
-
-    const fixed  = findings.length - newFindings.length;
-    const remain = newFindings.length;
-    console.log(
-      `\n  ${green("✔")} ${bold(green(`${fixed} issue${fixed !== 1 ? "s" : ""} fixed`))}` +
-      (remain > 0
-        ? `  ${dim("·")}  ${yellow(`${remain} remaining`)} ${dim("(needs manual context)")}`
-        : `  ${dim("·")}  ${green("prompt is clean")}`)
-    );
-
-    console.log();
-    promptNext();
-  };
+  let lastSource = null;
 
   const promptNext = () => {
     console.log(`  ${dim("─".repeat(58))}`);
@@ -430,26 +639,65 @@ async function runRepl() {
     rl.prompt();
   };
 
+  const flush = async () => {
+    const source = buffer.join("\n").trim();
+    buffer = [];
+
+    // Empty input used to `return` without redrawing, leaving a dead prompt.
+    if (!source) { promptNext(); return; }
+
+    if (source === ":quit" || source === ":q") {
+      console.log(`\n  ${gray("bye.\n")}`);
+      process.exit(0);
+    }
+    if (source === ":clear") { printWelcome(opts); promptNext(); return; }
+    if (source === ":force") {
+      if (!lastSource) {
+        console.log(`  ${yellow("⚠")} ${dim("nothing to re-optimize yet.")}\n`);
+        promptNext();
+        return;
+      }
+      console.log();
+      console.log(`  ${dim("─".repeat(58))}`);
+      await optimizeSource(lastSource, { ...opts, force: true });
+      promptNext();
+      return;
+    }
+
+    lastSource = source;
+    console.log();
+    console.log(`  ${dim("─".repeat(58))}`);
+    await optimizeSource(source, opts);
+    promptNext();
+  };
+
   rl.prompt();
 
   rl.on("line", (line) => {
     if (line.trim() === "" && buffer.length > 0) {
       rl.pause();
-      flush().then(() => rl.resume()).catch((e) => {
-        console.error(red(`  ✖ ${e.message}`));
-        rl.resume();
-      });
+      flush()
+        .catch((e) => console.error(red(`  ✖ ${e.message}`)))
+        .finally(() => rl.resume());
     } else {
       buffer.push(line);
+      // 1.0.0 never redrew the prompt here, so the "›" vanished after line 1.
+      rl.prompt();
     }
   });
 
   rl.on("close", () => {
-    if (buffer.length > 0) {
-      flush().then(() => { console.log(`\n  ${gray("bye.\n")}`); process.exit(0); });
-    } else {
+    const done = () => {
       console.log(`\n  ${gray("bye.\n")}`);
       process.exit(0);
+    };
+    if (buffer.length > 0) {
+      // A rejected flush() used to leave the process hanging forever.
+      flush()
+        .catch((e) => console.error(red(`  ✖ ${e.message}`)))
+        .finally(done);
+    } else {
+      done();
     }
   });
 
@@ -465,7 +713,55 @@ async function runRepl() {
   });
 }
 
-runRepl().catch((e) => {
-  console.error(red(`  ✖ ${e.message}`));
-  process.exit(1);
-});
+// ─── Entry ────────────────────────────────────────────────────────────────────
+
+export async function main(argv = process.argv.slice(2)) {
+  const opts = parseArgs(argv);
+
+  if (opts.error) {
+    console.error(red(`  ✖ ${opts.error}`));
+    console.error(dim("  Run 'prompt-optimizer --help' for usage."));
+    return 2;
+  }
+  if (opts.help) { console.log(HELP); return 0; }
+  if (opts.version) { console.log(VERSION); return 0; }
+
+  if (opts.files.length > 0) {
+    const inputs = [];
+    for (const file of opts.files) {
+      try {
+        inputs.push({ name: file, text: fs.readFileSync(file, "utf8") });
+      } catch (err) {
+        console.error(red(`  ✖ cannot read ${file}: ${err.message}`));
+        return 2;
+      }
+    }
+    return runBatch(inputs, opts);
+  }
+
+  if (!process.stdin.isTTY) {
+    const text = await readStdin();
+    if (!text.trim()) {
+      console.error(red("  ✖ no input on stdin"));
+      return 2;
+    }
+    return runBatch([{ name: "stdin", text }], opts);
+  }
+
+  await runRepl(opts);
+  return 0;
+}
+
+const invokedDirectly =
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+
+if (invokedDirectly) {
+  main().then(
+    (code) => { process.exitCode = code; },
+    (e) => {
+      console.error(red(`  ✖ ${e.message}`));
+      process.exitCode = 2;
+    }
+  );
+}

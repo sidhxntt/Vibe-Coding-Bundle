@@ -1,0 +1,43 @@
+{
+  "name": "@sidhxntt/prompt-rules",
+  "version": "1.0.0",
+  "description": "Shared prompt lint rules, analyzer, and score formula used by vibe-lint and prompt-optimizer",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "README.md",
+    "LICENSE.txt"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "keywords": [
+    "prompt",
+    "linter",
+    "rules",
+    "ai",
+    "llm",
+    "prompt-engineering"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sidhxntt/Vibe-Coding-Bundle.git",
+    "directory": "prompt_rules"
+  },
+  "homepage": "https://github.com/sidhxntt/Vibe-Coding-Bundle/tree/main/prompt_rules#readme",
+  "bugs": {
+    "url": "https://github.com/sidhxntt/Vibe-Coding-Bundle/issues"
+  },
+  "author": "Siddhant Gupta <siddhant@invytt.com>",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
+}

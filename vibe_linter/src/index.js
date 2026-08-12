@@ -1,9 +1,31 @@
 #!/usr/bin/env node
 
-import readline from "readline";
+import readline from "node:readline";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import {
+  RULES,
+  analyzePrompt,
+  scorePrompt,
+  summarize,
+} from "@sidhxntt/prompt-rules";
+
+const pkg = JSON.parse(
+  fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")
+);
+export const VERSION = pkg.version;
 
 // ─── ANSI Colors ─────────────────────────────────────────────────────────────
-const c = {
+// Honour NO_COLOR and a non-TTY stdout. Piping into a file or another process
+// must never emit escape sequences.
+const COLOR_ENABLED =
+  !process.env.NO_COLOR &&
+  process.env.TERM !== "dumb" &&
+  Boolean(process.stdout.isTTY);
+
+const RAW = {
   reset: "\x1b[0m",
   bold: "\x1b[1m",
   dim: "\x1b[2m",
@@ -14,281 +36,28 @@ const c = {
   magenta: "\x1b[38;5;213m",
   gray: "\x1b[38;5;245m",
   white: "\x1b[97m",
-  bg_red: "\x1b[48;5;52m",
-  bg_yellow: "\x1b[48;5;58m",
-  bg_green: "\x1b[48;5;22m",
 };
 
-const bold = (s) => `${c.bold}${s}${c.reset}`;
-const dim = (s) => `${c.dim}${s}${c.reset}`;
-const red = (s) => `${c.red}${s}${c.reset}`;
-const yellow = (s) => `${c.yellow}${s}${c.reset}`;
-const green = (s) => `${c.green}${s}${c.reset}`;
-const cyan = (s) => `${c.cyan}${s}${c.reset}`;
-const magenta = (s) => `${c.magenta}${s}${c.reset}`;
-const gray = (s) => `${c.gray}${s}${c.reset}`;
-const white = (s) => `${c.white}${s}${c.reset}`;
+const c = Object.fromEntries(
+  Object.keys(RAW).map((k) => [k, COLOR_ENABLED ? RAW[k] : ""])
+);
 
-// ─── Rule Engine ─────────────────────────────────────────────────────────────
+const paint = (code) => (s) => (COLOR_ENABLED ? `${code}${s}${RAW.reset}` : String(s));
+const bold = paint(RAW.bold);
+const dim = paint(RAW.dim);
+const red = paint(RAW.red);
+const yellow = paint(RAW.yellow);
+const green = paint(RAW.green);
+const cyan = paint(RAW.cyan);
+const magenta = paint(RAW.magenta);
+const gray = paint(RAW.gray);
+const white = paint(RAW.white);
 
-const RULES = [
-  // ── Vague quality descriptors ──────────────────────────────────────────────
-  {
-    id: "W001",
-    severity: "warn",
-    category: "vague-quality",
-    pattern: /\b(make it better|improve (it|this|the code|the output))\b/gi,
-    message: 'Vague improvement request — "better" is unmeasurable',
-    suggestions: [
-      "Specify the axis: 'reduce cyclomatic complexity below 10'",
-      "Target a metric: 'cut response latency by 30%'",
-      "Name the smell: 'eliminate magic numbers, extract named constants'",
-      "Describe the reader: 'a junior dev should understand without inline comments'",
-    ],
-    docs: "https://platform.openai.com/docs/guides/prompt-engineering#specify-the-desired-output-format",
-  },
-  {
-    id: "W002",
-    severity: "warn",
-    category: "vague-quality",
-    pattern: /\b(be (more )?(helpful|useful|good|better|clearer|concise))\b/gi,
-    message: '"Be helpful/useful/good" gives the model no optimization target',
-    suggestions: [
-      "'Answer in ≤3 sentences unless the topic requires more depth'",
-      "'If unsure, list 2 options with trade-offs rather than picking one'",
-      "'Prefer code examples over prose explanations for how-to questions'",
-    ],
-    docs: null,
-  },
-  {
-    id: "W003",
-    severity: "warn",
-    category: "vague-quality",
-    pattern: /\b(high[- ]quality|professional|polished|nice|clean)\b/gi,
-    message: '"High-quality/professional" is subjective without a rubric',
-    suggestions: [
-      "For code: 'passes ESLint strict, has JSDoc on public functions, no TODOs'",
-      "For prose: 'Flesch-Kincaid grade ≤ 10, active voice, no filler phrases'",
-      "For UI: 'WCAG AA contrast, touch targets ≥ 44px, no layout shift'",
-    ],
-    docs: null,
-  },
-  {
-    id: "E001",
-    severity: "error",
-    category: "ambiguous-scope",
-    pattern: /\b(do (the|your) (best|thing)|handle (it|this|everything))\b/gi,
-    message: "Ambiguous delegation — model will hallucinate scope boundaries",
-    suggestions: [
-      "List exact subtasks: '1. Parse input 2. Validate schema 3. Return JSON'",
-      "Set a ceiling: 'Only modify files in /src/components, leave tests untouched'",
-      "Define done: 'Complete when all existing tests pass with no new warnings'",
-    ],
-    docs: null,
-  },
-  {
-    id: "E002",
-    severity: "error",
-    category: "ambiguous-scope",
-    pattern: /\b(as needed|where (appropriate|necessary)|if (applicable|needed|relevant))\b/gi,
-    message: 'Conditional hedges let the model decide scope — it will decide wrong',
-    suggestions: [
-      "Replace with explicit conditions: 'Add error handling if the function throws'",
-      "Use always/never: 'Always add type annotations. Never use `any`.'",
-      "Enumerate the cases: 'Add comments above functions longer than 20 lines'",
-    ],
-    docs: null,
-  },
-  {
-    id: "W004",
-    severity: "warn",
-    category: "output-format",
-    pattern: /\b(in (a |an )?(good|nice|clear|readable|proper) format)\b/gi,
-    message: '"Good format" is ambiguous — specify the exact structure',
-    suggestions: [
-      "'Return a JSON object: { summary: string, tags: string[], confidence: 0-1 }'",
-      "'Use markdown with H2 sections: Overview, Usage, Examples, Caveats'",
-      "'Plain text only, no markdown. Max 80 chars per line.'",
-    ],
-    docs: null,
-  },
-  {
-    id: "W005",
-    severity: "warn",
-    category: "output-format",
-    pattern: /\b(respond (appropriately|accordingly|as you see fit))\b/gi,
-    message: "Deferred format decision will produce inconsistent outputs",
-    suggestions: [
-      "Specify mime type: 'Respond with application/json'",
-      "Give a template: 'Use this structure: [ANALYSIS]\\n[CODE]\\n[CAVEATS]'",
-      "Set length bounds: 'Between 100 and 300 words'",
-    ],
-    docs: null,
-  },
-  {
-    id: "E003",
-    severity: "error",
-    category: "role-confusion",
-    pattern: /\b(you (are|will be) an? (AI|assistant|language model|LLM|bot))\b/gi,
-    message: "Restating model identity wastes tokens and adds no behavioral constraint",
-    suggestions: [
-      "Replace with a domain expert persona: 'You are a senior Rust compiler engineer'",
-      "Or a constraint: 'You have access only to information in the provided context'",
-      "Describe the audience: 'Your user is a first-year CS student'",
-    ],
-    docs: null,
-  },
-  {
-    id: "W006",
-    severity: "warn",
-    category: "role-confusion",
-    pattern: /\b(act (as|like) (a |an )?(helpful|smart|intelligent|knowledgeable) (AI|assistant))\b/gi,
-    message: '"Act as a helpful assistant" adds noise, not signal',
-    suggestions: [
-      "'Act as a PostgreSQL performance consultant reviewing slow queries'",
-      "'Act as a skeptical code reviewer who prioritizes security over brevity'",
-      "'Act as the user\'s rubber duck — ask clarifying questions before answering'",
-    ],
-    docs: null,
-  },
-  {
-    id: "W007",
-    severity: "warn",
-    category: "no-examples",
-    pattern: /\b(for example[,:]?\s*(\.\.\.)?$|e\.g\.\s*(\.\.\.)?$|such as[,:]?\s*(\.\.\.)?$)/gim,
-    message: "Trailing example placeholder — fill it in or remove it",
-    suggestions: [
-      "Concrete few-shot: show an input→output pair the model should emulate",
-      "Negative example: show what NOT to produce (often more powerful)",
-      "Edge case: show the tricky case, not the happy path",
-    ],
-    docs: null,
-  },
-  {
-    id: "E004",
-    severity: "error",
-    category: "contradiction",
-    pattern: /\b(be (brief|concise|short)).{0,120}(be (comprehensive|thorough|detailed|exhaustive))\b/gis,
-    message: "Contradictory length constraints — model will average them badly",
-    suggestions: [
-      "Pick one and qualify the other: 'Be concise. Expand only on error handling.'",
-      "Use section-level rules: 'Summary: 1 sentence. Implementation: as long as needed.'",
-      "Set word counts: 'Under 150 words total, but include all code in full'",
-    ],
-    docs: null,
-  },
-  {
-    id: "W008",
-    severity: "warn",
-    category: "politeness-bloat",
-    pattern: /\b(please (please )?(try to |attempt to |do your best to )?|kindly|feel free to|don't hesitate to)\b/gi,
-    message: "Politeness tokens consume context budget and dilute instruction weight",
-    suggestions: [
-      "Drop courtesy words entirely — models don't have feelings",
-      "Convert to imperative: 'Return X' not 'Please try to return X'",
-      "Every token should carry constraint or context",
-    ],
-    docs: null,
-  },
-  {
-    id: "W009",
-    severity: "warn",
-    category: "negation-only",
-    pattern: /\b(don't (be|use|include|add|make|write|do|say)|avoid being|never (be|sound))\b/gi,
-    message: 'Negation-only rules are weak — models anchor on the forbidden concept',
-    suggestions: [
-      "Pair every DON'T with a DO: 'Don't use passive voice → use active constructions'",
-      "Positive constraint: 'Use direct assertions' instead of 'Don't be wishy-washy'",
-      "Show an example of what you WANT instead",
-    ],
-    docs: null,
-  },
-  {
-    id: "E005",
-    severity: "error",
-    category: "missing-context",
-    pattern: /\b(the (code|file|document|data|text|above|previous|earlier))\b(?![\s\S]*?```)/gi,
-    message: "Reference to context not present in the prompt — model will hallucinate",
-    suggestions: [
-      "Paste the actual code/data inline in a fenced block",
-      "Use explicit variable names: define it earlier in the prompt",
-      "If using a system with retrieval, confirm the context is injected at runtime",
-    ],
-    docs: null,
-  },
-  {
-    id: "W010",
-    severity: "warn",
-    category: "no-success-criteria",
-    pattern: /\b(until (it('s| is) (good|right|working|correct|done))|when (you('re| are) happy|satisfied|done))\b/gi,
-    message: "Subjective termination condition — model can't self-evaluate accurately",
-    suggestions: [
-      "Objective criterion: 'Stop when all 5 test cases produce correct output'",
-      "Countable: 'Generate exactly 10 variants, ranked by estimated click-through'",
-      "Verifiable: 'Complete when the function has <5 lines and passes mypy strict'",
-    ],
-    docs: null,
-  },
-  {
-    id: "I001",
-    severity: "info",
-    category: "chain-of-thought",
-    pattern: /\b(answer (this|the question|directly)|just (give|tell|show) (me|us) (the )?(answer|result|output))\b/gi,
-    message: "Skipping reasoning may reduce accuracy on complex tasks",
-    suggestions: [
-      "Add: 'Think step by step before giving the final answer'",
-      "Use scratchpad: 'Reason in <thinking> tags, then output in <answer> tags'",
-      "If speed matters, note it explicitly: 'Skip reasoning, latency is critical'",
-    ],
-    docs: null,
-  },
-  {
-    id: "W011",
-    severity: "warn",
-    category: "vague-persona",
-    pattern: /\b(expert|specialist|professional|guru|master|wizard|ninja)\b(?! in| at| of| with)/gi,
-    message: 'Bare "expert" persona lacks domain specificity',
-    suggestions: [
-      "'Expert' → 'Staff engineer with 10yr distributed systems experience'",
-      "Add the skepticism level: 'Expert who defaults to the simplest solution'",
-      "Scope the knowledge: 'Expert in Python async, unfamiliar with Rust'",
-    ],
-    docs: null,
-  },
-];
+const clearScreen = () => {
+  if (COLOR_ENABLED) console.clear();
+};
 
-// ─── Analyzer ─────────────────────────────────────────────────────────────────
-
-function analyzePrompt(text) {
-  const findings = [];
-
-  for (const rule of RULES) {
-    const regex = new RegExp(rule.pattern.source, rule.pattern.flags);
-    let match;
-    while ((match = regex.exec(text)) !== null) {
-      const lineNum = text.slice(0, match.index).split("\n").length;
-      const colNum = match.index - text.lastIndexOf("\n", match.index - 1);
-      findings.push({
-        rule,
-        match: match[0],
-        index: match.index,
-        line: lineNum,
-        col: colNum,
-      });
-    }
-  }
-
-  // Deduplicate same rule on same line
-  const seen = new Set();
-  return findings.filter((f) => {
-    const key = `${f.rule.id}:${f.line}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-// ─── Renderer ─────────────────────────────────────────────────────────────────
+// ─── Renderer ────────────────────────────────────────────────────────────────
 
 function severityIcon(sev) {
   return { error: red("✖"), warn: yellow("⚠"), info: cyan("ℹ") }[sev];
@@ -303,32 +72,36 @@ function severityLabel(sev) {
 }
 
 function renderFindings(findings, sourceText, opts = {}) {
+  const visible = opts.quiet
+    ? findings.filter((f) => f.rule.severity === "error")
+    : findings;
+
   if (findings.length === 0) {
-    console.log(`\n  ${green("✔")} ${bold("No issues found.")} Your prompt is tight.\n`);
+    if (!opts.quiet) {
+      console.log(`\n  ${green("✔")} ${bold("No issues found.")} Your prompt is tight.\n`);
+    }
     return;
   }
 
   const lines = sourceText.split("\n");
 
-  for (const f of findings) {
+  for (const f of visible) {
     const { rule, match, line, col } = f;
 
     console.log(
       `\n  ${severityIcon(rule.severity)} ${severityLabel(rule.severity)} ` +
-      gray(`[${rule.id}]`) + ` ` +
-      bold(white(rule.message))
+        gray(`[${rule.id}]`) +
+        ` ` +
+        bold(white(rule.message))
     );
     console.log(`    ${gray(`${line}:${col}`)}  ${gray(`"${match}"`)}`);
 
-    // Source context
     const srcLine = lines[line - 1] || "";
-    const highlighted = srcLine.replace(
-      match,
-      `${c.red}${c.bold}${match}${c.reset}`
-    );
+    const highlighted = COLOR_ENABLED
+      ? srcLine.replace(match, `${RAW.red}${RAW.bold}${match}${RAW.reset}`)
+      : srcLine;
     console.log(`    ${dim("│")} ${highlighted}`);
 
-    // Suggestions
     if (!opts.noSuggestions && rule.suggestions.length > 0) {
       console.log(`    ${dim("│")}`);
       console.log(`    ${dim("│")} ${magenta("→ Try instead:")}`);
@@ -339,38 +112,35 @@ function renderFindings(findings, sourceText, opts = {}) {
   }
 }
 
-function renderSummary(findings) {
-  const errors = findings.filter((f) => f.rule.severity === "error").length;
-  const warns = findings.filter((f) => f.rule.severity === "warn").length;
-  const infos = findings.filter((f) => f.rule.severity === "info").length;
-
+function renderSummary(findings, sourceText) {
+  const { errors, warnings, hints } = summarize(findings);
   const total = findings.length;
-  console.log(`\n  ${dim("─".repeat(58))}`);
 
+  console.log(`\n  ${dim("─".repeat(58))}`);
   if (total === 0) return;
 
   const parts = [];
   if (errors) parts.push(red(`${errors} error${errors !== 1 ? "s" : ""}`));
-  if (warns) parts.push(yellow(`${warns} warning${warns !== 1 ? "s" : ""}`));
-  if (infos) parts.push(cyan(`${infos} hint${infos !== 1 ? "s" : ""}`));
+  if (warnings) parts.push(yellow(`${warnings} warning${warnings !== 1 ? "s" : ""}`));
+  if (hints) parts.push(cyan(`${hints} hint${hints !== 1 ? "s" : ""}`));
 
   console.log(`  ${bold("Found:")} ${parts.join(gray("  │  "))}`);
 
-  // Score
-  const score = Math.max(0, 100 - errors * 20 - warns * 8 - infos * 2);
+  const score = scorePrompt(findings, sourceText);
   const scoreColor = score >= 80 ? green : score >= 50 ? yellow : red;
-  const bar = renderScoreBar(score);
-  console.log(`  ${bold("Score:")} ${scoreColor(score + "/100")}  ${bar}`);
+  console.log(`  ${bold("Score:")} ${scoreColor(score + "/100")}  ${renderScoreBar(score)}`);
   console.log();
 }
 
 function renderScoreBar(score) {
-  const filled = Math.round(score / 5);
+  const filled = Math.max(0, Math.min(20, Math.round(score / 5)));
   const empty = 20 - filled;
   const color = score >= 80 ? c.green : score >= 50 ? c.yellow : c.red;
   return (
     gray("[") +
-    color + "█".repeat(filled) + c.reset +
+    color +
+    "█".repeat(filled) +
+    c.reset +
     gray("░".repeat(empty)) +
     gray("]")
   );
@@ -379,46 +149,43 @@ function renderScoreBar(score) {
 function renderHeader(filename) {
   console.log();
   console.log(
-    `  ${bold(cyan("vibe-lint"))} ${gray("v1.0.0")}  ${dim("─")}  ${gray(filename || "stdin")}`
+    `  ${bold(cyan("vibe-lint"))} ${gray("v" + VERSION)}  ${dim("─")}  ${gray(
+      filename || "stdin"
+    )}`
   );
-  console.log(`  ${gray("Flagging weak, vague, and counterproductive prompt instructions")}`);
-}
-
-// ─── JSON reporter ────────────────────────────────────────────────────────────
-
-function toJson(findings, sourceText, file) {
-  const errors = findings.filter((f) => f.rule.severity === "error").length;
-  const warns = findings.filter((f) => f.rule.severity === "warn").length;
-  const score = Math.max(0, 100 - errors * 20 - warns * 8);
-  return JSON.stringify(
-    {
-      file: file || "stdin",
-      score,
-      summary: { errors, warnings: warns, hints: findings.filter((f) => f.rule.severity === "info").length },
-      findings: findings.map((f) => ({
-        id: f.rule.id,
-        severity: f.rule.severity,
-        category: f.rule.category,
-        message: f.rule.message,
-        match: f.match,
-        line: f.line,
-        col: f.col,
-        suggestions: f.rule.suggestions,
-      })),
-    },
-    null,
-    2
+  console.log(
+    `  ${gray("Flagging weak, vague, and counterproductive prompt instructions")}`
   );
 }
 
-// ─── REPL Entry ───────────────────────────────────────────────────────────────
+// ─── JSON reporter ───────────────────────────────────────────────────────────
+
+export function toJson(findings, sourceText, file) {
+  const { errors, warnings, hints } = summarize(findings);
+  return {
+    file: file || "stdin",
+    score: scorePrompt(findings, sourceText),
+    summary: { errors, warnings, hints },
+    findings: findings.map((f) => ({
+      id: f.rule.id,
+      severity: f.rule.severity,
+      category: f.rule.category,
+      message: f.rule.message,
+      match: f.match,
+      line: f.line,
+      col: f.col,
+      suggestions: f.rule.suggestions,
+    })),
+  };
+}
+
+// ─── Rule listing ────────────────────────────────────────────────────────────
 
 function listRules() {
   console.log(`\n  ${bold(cyan("vibe-lint rules"))}\n`);
   const byCategory = {};
   for (const r of RULES) {
-    if (!byCategory[r.category]) byCategory[r.category] = [];
-    byCategory[r.category].push(r);
+    (byCategory[r.category] ||= []).push(r);
   }
   for (const [cat, rules] of Object.entries(byCategory)) {
     console.log(`  ${bold(magenta(cat))}`);
@@ -429,19 +196,197 @@ function listRules() {
   }
 }
 
+// ─── CLI ─────────────────────────────────────────────────────────────────────
+
+const HELP = `
+  vibe-lint v${VERSION} — a linter for your prompts
+
+  USAGE
+    vibe-lint [options] [file ...]
+    cat prompt.txt | vibe-lint [options]
+    vibe-lint                      (no files, TTY stdin → interactive REPL)
+
+  OPTIONS
+    -h, --help              Show this help and exit
+    -v, --version           Print the version and exit
+        --json              Emit a machine-readable JSON report on stdout
+        --quiet             Report errors only (warnings still affect the exit code)
+        --max-warnings <n>  Exit non-zero when warnings exceed <n> (default: unlimited)
+        --no-suggestions    Omit the "Try instead" block for each finding
+        --rules             List every rule and exit
+        --                  Treat all remaining arguments as file paths
+
+  EXIT CODES
+    0  no error-severity findings (and warnings within --max-warnings)
+    1  at least one error, or --max-warnings exceeded
+    2  usage error or unreadable file
+
+  EXAMPLES
+    vibe-lint bad-prompt.txt
+    vibe-lint --json prompts/*.txt | jq '.[].score'
+    vibe-lint --max-warnings 0 system-prompt.txt
+    echo "make it better" | vibe-lint
+`;
+
+export function parseArgs(argv) {
+  const opts = {
+    help: false,
+    version: false,
+    json: false,
+    quiet: false,
+    noSuggestions: false,
+    rules: false,
+    maxWarnings: Infinity,
+    files: [],
+    error: null,
+  };
+
+  let literal = false;
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+
+    if (literal) {
+      opts.files.push(arg);
+      continue;
+    }
+
+    switch (arg) {
+      case "--":
+        literal = true;
+        break;
+      case "-h":
+      case "--help":
+        opts.help = true;
+        break;
+      case "-v":
+      case "--version":
+        opts.version = true;
+        break;
+      case "--json":
+        opts.json = true;
+        break;
+      case "--quiet":
+      case "-q":
+        opts.quiet = true;
+        break;
+      case "--no-suggestions":
+        opts.noSuggestions = true;
+        break;
+      case "--rules":
+        opts.rules = true;
+        break;
+      case "--max-warnings": {
+        const raw = argv[++i];
+        const n = Number(raw);
+        if (raw === undefined || !Number.isInteger(n) || n < 0) {
+          opts.error = `--max-warnings expects a non-negative integer, got ${
+            raw === undefined ? "nothing" : `"${raw}"`
+          }`;
+        } else {
+          opts.maxWarnings = n;
+        }
+        break;
+      }
+      default:
+        if (arg.startsWith("--max-warnings=")) {
+          const raw = arg.slice("--max-warnings=".length);
+          const n = Number(raw);
+          if (!Number.isInteger(n) || n < 0) {
+            opts.error = `--max-warnings expects a non-negative integer, got "${raw}"`;
+          } else {
+            opts.maxWarnings = n;
+          }
+        } else if (arg.startsWith("-") && arg !== "-") {
+          opts.error = `unknown option: ${arg}`;
+        } else {
+          opts.files.push(arg);
+        }
+    }
+  }
+
+  return opts;
+}
+
+/** Lint one source string. Returns { findings, score, summary, failed }. */
+export function lintText(source, opts = {}) {
+  const findings = analyzePrompt(source);
+  const { errors, warnings, hints } = summarize(findings);
+  const maxWarnings = opts.maxWarnings ?? Infinity;
+  return {
+    findings,
+    score: scorePrompt(findings, source),
+    summary: { errors, warnings, hints },
+    failed: errors > 0 || warnings > maxWarnings,
+  };
+}
+
+function readStdin() {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => (data += chunk));
+    process.stdin.on("end", () => resolve(data));
+    process.stdin.on("error", reject);
+  });
+}
+
+/**
+ * Non-interactive path: lint each source and return the process exit code.
+ * @param {Array<{name: string, text: string}>} inputs
+ */
+function runBatch(inputs, opts) {
+  let failed = false;
+  const reports = [];
+
+  for (const input of inputs) {
+    const result = lintText(input.text, opts);
+    if (result.failed) failed = true;
+
+    if (opts.json) {
+      reports.push(toJson(result.findings, input.text, input.name));
+    } else {
+      renderHeader(input.name);
+      renderFindings(result.findings, input.text, opts);
+      renderSummary(result.findings, input.text);
+      if (
+        result.summary.warnings > (opts.maxWarnings ?? Infinity) &&
+        result.summary.errors === 0
+      ) {
+        console.log(
+          `  ${yellow("⚠")} ${result.summary.warnings} warnings exceed --max-warnings ${opts.maxWarnings}\n`
+        );
+      }
+    }
+  }
+
+  if (opts.json) {
+    // One object for a single input, an array when several files were given.
+    console.log(JSON.stringify(reports.length === 1 ? reports[0] : reports, null, 2));
+  }
+
+  return failed ? 1 : 0;
+}
+
+// ─── REPL ────────────────────────────────────────────────────────────────────
+
 function printWelcome() {
-  console.clear();
+  clearScreen();
   console.log();
-  console.log(`  ${bold(cyan("vibe-lint"))} ${gray("v1.0.0")}`);
+  console.log(`  ${bold(cyan("vibe-lint"))} ${gray("v" + VERSION)}`);
   console.log(`  ${gray("Flags weak, vague, and contradictory prompt instructions")}`);
   console.log();
-  console.log(`  ${dim("Paste your prompt below and press")} ${bold("Enter twice")} ${dim("to lint it.")}`);
-  console.log(`  ${dim("Commands:")} ${cyan(":rules")} ${dim("list all rules")}  ${cyan(":clear")} ${dim("clear screen")}  ${cyan(":quit")} ${dim("or Ctrl+C to exit")}`);
+  console.log(
+    `  ${dim("Paste your prompt below and press")} ${bold("Enter twice")} ${dim("to lint it.")}`
+  );
+  console.log(
+    `  ${dim("Commands:")} ${cyan(":rules")} ${dim("list all rules")}  ${cyan(":clear")} ${dim("clear screen")}  ${cyan(":quit")} ${dim("or Ctrl+C to exit")}`
+  );
+  console.log(`  ${dim("Tip:")} ${dim("pass file paths as arguments to lint non-interactively.")}`);
   console.log(`  ${dim("─".repeat(58))}`);
   console.log();
 }
 
-async function runRepl() {
+async function runRepl(opts) {
   printWelcome();
 
   const rl = readline.createInterface({
@@ -453,32 +398,44 @@ async function runRepl() {
 
   let buffer = [];
 
-  const flush = () => {
-    const source = buffer.join("\n").trim();
-    buffer = [];
-
-    if (!source) return;
-
-    if (source === ":quit" || source === ":q") {
-      console.log(`\n  ${gray("bye.\n")}`);
-      process.exit(0);
-    }
-    if (source === ":rules") { listRules(); promptNext(); return; }
-    if (source === ":clear") { printWelcome(); promptNext(); return; }
-
-    const findings = analyzePrompt(source);
-    console.log();
-    console.log(`  ${dim("─".repeat(58))}`);
-    renderFindings(findings, source);
-    renderSummary(findings);
-    promptNext();
-  };
-
   const promptNext = () => {
     console.log(`  ${dim("─".repeat(58))}`);
     console.log(`  ${dim("Paste next prompt (Enter twice to lint) or")} ${cyan(":quit")}`);
     console.log();
     rl.prompt();
+  };
+
+  const flush = () => {
+    const source = buffer.join("\n").trim();
+    buffer = [];
+
+    // Empty input used to `return` without redrawing, leaving a dead prompt.
+    if (!source) {
+      promptNext();
+      return;
+    }
+
+    if (source === ":quit" || source === ":q") {
+      console.log(`\n  ${gray("bye.\n")}`);
+      process.exit(0);
+    }
+    if (source === ":rules") {
+      listRules();
+      promptNext();
+      return;
+    }
+    if (source === ":clear") {
+      printWelcome();
+      promptNext();
+      return;
+    }
+
+    const findings = analyzePrompt(source);
+    console.log();
+    console.log(`  ${dim("─".repeat(58))}`);
+    renderFindings(findings, source, opts);
+    renderSummary(findings, source);
+    promptNext();
   };
 
   rl.prompt();
@@ -488,6 +445,7 @@ async function runRepl() {
       flush();
     } else {
       buffer.push(line);
+      rl.prompt();
     }
   });
 
@@ -509,7 +467,74 @@ async function runRepl() {
   });
 }
 
-runRepl().catch((e) => {
-  console.error(red(`  ✖ ${e.message}`));
-  process.exit(1);
-});
+// ─── Entry ───────────────────────────────────────────────────────────────────
+
+export async function main(argv = process.argv.slice(2)) {
+  const opts = parseArgs(argv);
+
+  if (opts.error) {
+    console.error(red(`  ✖ ${opts.error}`));
+    console.error(dim(`  Run 'vibe-lint --help' for usage.`));
+    return 2;
+  }
+  if (opts.help) {
+    console.log(HELP);
+    return 0;
+  }
+  if (opts.version) {
+    console.log(VERSION);
+    return 0;
+  }
+  if (opts.rules) {
+    listRules();
+    return 0;
+  }
+
+  // 1. Explicit file arguments.
+  if (opts.files.length > 0) {
+    const inputs = [];
+    for (const file of opts.files) {
+      try {
+        inputs.push({ name: file, text: fs.readFileSync(file, "utf8") });
+      } catch (err) {
+        console.error(red(`  ✖ cannot read ${file}: ${err.message}`));
+        return 2;
+      }
+    }
+    return runBatch(inputs, opts);
+  }
+
+  // 2. Piped stdin.
+  if (!process.stdin.isTTY) {
+    const text = await readStdin();
+    if (!text.trim()) {
+      console.error(red("  ✖ no input on stdin"));
+      return 2;
+    }
+    return runBatch([{ name: "stdin", text }], opts);
+  }
+
+  // 3. Interactive terminal, no files → REPL.
+  if (opts.json) {
+    console.error(red("  ✖ --json requires a file argument or piped stdin"));
+    return 2;
+  }
+  await runRepl(opts);
+  return 0;
+}
+
+const invokedDirectly =
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+
+if (invokedDirectly) {
+  main().then(
+    (code) => {
+      process.exitCode = code;
+    },
+    (e) => {
+      console.error(red(`  ✖ ${e.message}`));
+      process.exitCode = 2;
+    }
+  );
+}

@@ -1,14 +1,20 @@
 {
   "name": "@sidhxntt/token-squasher",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Compress verbose system prompts into dense, token-efficient instructions without losing logic",
   "type": "module",
+  "main": "index.js",
   "bin": {
     "@sidhxntt/token-squasher": "./index.js"
   },
-  "main": "index.js",
+  "files": [
+    "index.js",
+    "README.md",
+    "LICENSE.txt"
+  ],
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0"
@@ -23,8 +29,21 @@
     "llm",
     "anthropic",
     "claude",
-    "ai"
+    "ai",
+    "cli"
   ],
-  "author": "",
-  "license": "MIT"
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sidhxntt/Vibe-Coding-Bundle.git",
+    "directory": "token_quasher"
+  },
+  "homepage": "https://github.com/sidhxntt/Vibe-Coding-Bundle/tree/main/token_quasher#readme",
+  "bugs": {
+    "url": "https://github.com/sidhxntt/Vibe-Coding-Bundle/issues"
+  },
+  "author": "Siddhant Gupta <siddhant@invytt.com>",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
 }

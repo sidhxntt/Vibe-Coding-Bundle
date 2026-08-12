@@ -1,0 +1,17 @@
+{
+  "name": "vibe-coding-bundle",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Monorepo root for the Vibe Coding Bundle (vibe-lint, prompt-optimizer, token-squasher)",
+  "workspaces": [
+    "prompt_rules",
+    "vibe_linter",
+    "prompt_optimiser",
+    "token_quasher"
+  ],
+  "scripts": {
+    "test": "npm run test --workspaces --if-present"
+  },
+  "license": "MIT",
+  "author": "Siddhant Gupta <siddhant@invytt.com>"
+}

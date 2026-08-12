@@ -1,14 +1,47 @@
 {
   "name": "@sidhxntt/vibe-lint",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "A linter for your prompts — flags weak, vague, and contradictory instructions",
   "type": "module",
+  "main": "src/index.js",
   "bin": {
     "@sidhxntt/vibe-lint": "./src/index.js"
   },
+  "files": [
+    "src/",
+    "README.md",
+    "LICENSE.txt"
+  ],
   "scripts": {
-    "start": "node ./src/index.js"
+    "start": "node ./src/index.js",
+    "test": "node --test test/*.test.js"
   },
-  "keywords": ["prompt", "linter", "ai", "llm", "prompt-engineering"],
-  "license": "MIT"
+  "dependencies": {
+    "@sidhxntt/prompt-rules": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "prompt",
+    "linter",
+    "ai",
+    "llm",
+    "prompt-engineering",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sidhxntt/Vibe-Coding-Bundle.git",
+    "directory": "vibe_linter"
+  },
+  "homepage": "https://github.com/sidhxntt/Vibe-Coding-Bundle/tree/main/vibe_linter#readme",
+  "bugs": {
+    "url": "https://github.com/sidhxntt/Vibe-Coding-Bundle/issues"
+  },
+  "author": "Siddhant Gupta <siddhant@invytt.com>",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
 }
