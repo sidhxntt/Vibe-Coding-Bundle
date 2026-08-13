@@ -41,7 +41,8 @@
     "prepublishOnly": "npm run build"
   },
   "files": [
-    "dist/"
+    "dist/",
+    "!dist/**/*.map"
   ],
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
