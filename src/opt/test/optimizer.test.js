@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { analyzePrompt } from "@sidhxntt/prompt-rules";
+import { analyzePrompt } from "../../rules/index.js";
 import {
   VERSION,
   DEFAULT_MODEL,

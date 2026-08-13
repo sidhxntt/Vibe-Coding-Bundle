@@ -1,0 +1,9 @@
+{
+  "name": "@sidhxntt/prompt-rules",
+  "version": "1.0.1",
+  "description": "Shared prompt lint rules, analyzer, and score formula used by vibe-lint and prompt-optimizer",
+  "type": "module",
+  "main": "index.js",
+  "author": "Siddhant Gupta <siddhant@invytt.com>",
+  "license": "MIT"
+}

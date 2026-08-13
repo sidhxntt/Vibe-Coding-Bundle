@@ -5,15 +5,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Bundled sibling rather than a published dependency: vibe-coding-bundle ships
+// the rule set alongside this CLI, so the two can never drift out of version.
 import {
   RULES,
   analyzePrompt,
   scorePrompt,
   summarize,
-} from "@sidhxntt/prompt-rules";
+} from "../rules/index.js";
 
 const pkg = JSON.parse(
-  fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")
+  fs.readFileSync(new URL("./package.json", import.meta.url), "utf8")
 );
 export const VERSION = pkg.version;
 

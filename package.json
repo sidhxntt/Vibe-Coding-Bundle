@@ -1,17 +1,55 @@
 {
   "name": "vibe-coding-bundle",
   "version": "1.0.0",
-  "private": true,
-  "description": "Monorepo root for the Vibe Coding Bundle (vibe-lint, prompt-optimizer, token-squasher)",
-  "workspaces": [
-    "prompt_rules",
-    "vibe_linter",
-    "prompt_optimiser",
-    "token_quasher"
+  "description": "Interactive CLI for prompt engineering, behind one command: lint prompts against 17 rules, rewrite weak ones with Claude, and squash verbose system prompts.",
+  "keywords": [
+    "cli",
+    "prompt",
+    "prompt-engineering",
+    "linter",
+    "optimizer",
+    "token",
+    "compression",
+    "ai",
+    "llm",
+    "anthropic",
+    "claude"
   ],
-  "scripts": {
-    "test": "npm run test --workspaces --if-present"
+  "homepage": "https://github.com/sidhxntt/Vibe-Coding-Bundle#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sidhxntt/Vibe-Coding-Bundle.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sidhxntt/Vibe-Coding-Bundle/issues"
   },
   "license": "MIT",
-  "author": "Siddhant Gupta <siddhant@invytt.com>"
+  "author": "Siddhant Gupta <siddhant@invytt.com>",
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "vibe-coding-bundle": "./dist/index.js",
+    "vibe": "./dist/index.js"
+  },
+  "scripts": {
+    "dev": "ts-node ./src/index.ts",
+    "start": "node ./dist/index.js",
+    "build": "tsc && npm run copy:tools && chmod +x dist/index.js",
+    "copy:tools": "mkdir -p dist/lint dist/opt dist/rules dist/squash && cp src/lint/index.js src/lint/package.json dist/lint/ && cp src/opt/index.js src/opt/package.json dist/opt/ && cp src/rules/index.js src/rules/package.json dist/rules/ && cp src/squash/index.js src/squash/package.json dist/squash/",
+    "test": "node --test src/*/test/*.test.js",
+    "prepublishOnly": "npm run build"
+  },
+  "files": [
+    "dist/"
+  ],
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.52.0",
+    "@clack/prompts": "^0.10.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3"
+  }
 }

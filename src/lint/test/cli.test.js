@@ -6,10 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { parseArgs, lintText, toJson, VERSION } from "../src/index.js";
+import { parseArgs, lintText, toJson, VERSION } from "../index.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const CLI = path.join(here, "..", "src", "index.js");
+const CLI = path.join(here, "..", "index.js");
 const BAD = path.join(here, "..", "bad-prompt.txt");
 const GOOD = path.join(here, "..", "good-prompt.txt");
 

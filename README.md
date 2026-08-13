@@ -24,7 +24,32 @@ A collection of AI prompt engineering tools that lint, optimize, and compress pr
 
 ## Installation
 
-### Install individual tools globally
+### One command for all three tools
+
+```bash
+npm install -g vibe-coding-bundle
+vibe
+```
+
+`vibe` opens a menu. Name a tool instead and its arguments pass straight
+through, so the launcher never stands between you and the work:
+
+```bash
+vibe lint my-prompt.txt          # lint
+vibe opt my-prompt.txt           # rewrite with Claude
+vibe squash system-prompt.txt    # compress
+```
+
+| Alias | Tool | What it does |
+| --- | --- | --- |
+| `lint` | vibe-lint | flags weak, vague and contradictory prompt instructions |
+| `opt` | prompt-optimizer | rewrites a weak prompt with Claude, and scores the result |
+| `squash` | token-squasher | compresses a verbose system prompt, keeps every rule |
+
+`vibe-coding-bundle` is the same command, if you prefer the long name.
+`--no-splash` skips the opening animation.
+
+### Or install individual tools globally
 
 ```bash
 npm install -g @sidhxntt/vibe-lint
@@ -37,8 +62,10 @@ npm install -g @sidhxntt/token-squasher
 ```bash
 git clone https://github.com/sidhxntt/Vibe-Coding-Bundle.git
 cd Vibe-Coding-Bundle
-npm install        # npm workspaces: links @sidhxntt/prompt-rules into both consumers
-npm test           # runs every package's suite
+npm install
+npm run build      # compiles the launcher and copies the tools into dist/
+npm test           # runs every tool's suite
+npm run dev        # the launcher straight from src/, via ts-node
 ```
 
 ## Configuration
@@ -78,11 +105,11 @@ vibe-lint --max-warnings 0 system-prompt.txt      # strict CI gate
 echo "You are a helpful AI assistant." | vibe-lint
 ```
 
-Real output from `vibe-lint --no-suggestions --quiet vibe_linter/bad-prompt.txt`
+Real output from `vibe-lint --no-suggestions --quiet src/lint/bad-prompt.txt`
 (exit code 1):
 
 ```
-  vibe-lint v1.0.0  ─  vibe_linter/bad-prompt.txt
+  vibe-lint v2.0.1  ─  src/lint/bad-prompt.txt
   Flagging weak, vague, and counterproductive prompt instructions
 
   ✖ error [E005] Reference to context not present in the prompt — model will hallucinate
@@ -155,26 +182,38 @@ Commands: `:stats` · `:verbose` · `:clear` · `:quit`
 
 ```
 Vibe-Coding-Bundle/
-├── package.json               # npm workspaces root
-├── prompt_rules/              # @sidhxntt/prompt-rules — the shared rule engine
-│   ├── index.js               # RULES, analyzePrompt, scorePrompt
-│   └── test/rules.test.js
-├── vibe_linter/               # @sidhxntt/vibe-lint
-│   ├── src/index.js           # CLI, renderers, JSON reporter
-│   ├── good-prompt.txt        # fixture read by the tests
-│   ├── bad-prompt.txt         # fixture read by the tests
-│   └── test/cli.test.js
-├── prompt_optimiser/          # @sidhxntt/prompt-optimizer
-│   ├── index.js               # CLI + Claude API integration
-│   └── test/optimizer.test.js
-└── token_quasher/             # @sidhxntt/token-squasher
-    ├── index.js               # CLI + REPL + token statistics
-    └── test/squasher.test.js
+├── package.json               # the launcher package: one bin, merged deps
+├── tsconfig.json              # compiles src/*.ts only — the tools ship as-is
+├── src/
+│   ├── index.ts               # launcher: menu, dispatch, argv passthrough
+│   ├── tools.ts               # alias → entry point registry
+│   ├── splash.ts              # the opening animation
+│   ├── rules/                 # @sidhxntt/prompt-rules — the shared rule engine
+│   │   ├── index.js           # RULES, analyzePrompt, scorePrompt
+│   │   └── test/rules.test.js
+│   ├── lint/                  # @sidhxntt/vibe-lint
+│   │   ├── index.js           # CLI, renderers, JSON reporter
+│   │   ├── good-prompt.txt    # fixture read by the tests
+│   │   ├── bad-prompt.txt     # fixture read by the tests
+│   │   └── test/cli.test.js
+│   ├── opt/                   # @sidhxntt/prompt-optimizer
+│   │   ├── index.js           # CLI + Claude API integration
+│   │   └── test/optimizer.test.js
+│   └── squash/                # @sidhxntt/token-squasher
+│       ├── index.js           # CLI + REPL + token statistics
+│       └── test/squasher.test.js
+└── docs/                      # the GitHub Pages site
 ```
+
+The three CLIs are unchanged standalone programs. The launcher starts each one
+as a child process with inherited stdio, so a tool owns the terminal — and its
+own REPL — exactly as it does when installed on its own. Each keeps its own
+`package.json`, which is where it reads its version from, and `type: module`
+there is what keeps the tools ESM inside a CommonJS launcher.
 
 ## Adding custom rules
 
-Rules live in `prompt_rules/index.js` and are imported by both linting tools —
+Rules live in `src/rules/index.js` and are imported by both linting tools —
 there is no second copy to keep in sync.
 
 ```javascript
@@ -193,7 +232,7 @@ there is no second copy to keep in sync.
 }
 ```
 
-Add a matching entry to `CASES` in `prompt_rules/test/rules.test.js`; the suite
+Add a matching entry to `CASES` in `src/rules/test/rules.test.js`; the suite
 fails if a rule ships without a known-positive **and** a known-negative.
 
 ### Severity levels
@@ -233,31 +272,37 @@ Return: markdown with ## Issues and ## Fixed Code sections.
 
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature-name`
-3. Add rules to `prompt_rules/index.js`, following the existing pattern
-4. Add a positive and a negative test case in `prompt_rules/test/rules.test.js`
+3. Add rules to `src/rules/index.js`, following the existing pattern
+4. Add a positive and a negative test case in `src/rules/test/rules.test.js`
 5. Run the suites: `npm test` from the repo root
 6. Verify the fixtures still behave:
-   `node vibe_linter/src/index.js vibe_linter/good-prompt.txt` (exit 0) and
-   `node vibe_linter/src/index.js vibe_linter/bad-prompt.txt` (exit 1)
+   `node src/lint/index.js src/lint/good-prompt.txt` (exit 0) and
+   `node src/lint/index.js src/lint/bad-prompt.txt` (exit 1)
 7. Submit a pull request
 
 ### Testing your changes
 
 ```bash
-npm test                                   # every workspace
-npm test --workspace @sidhxntt/vibe-lint   # one package
+npm test                                   # every tool's suite
+node --test src/lint/test/*.test.js        # one tool
 
-node vibe_linter/src/index.js vibe_linter/bad-prompt.txt
-node prompt_optimiser/index.js --help
-node token_quasher/index.js --help
+node src/lint/index.js src/lint/bad-prompt.txt
+node src/opt/index.js --help
+node src/squash/index.js --help
+
+npm run build && node dist/index.js lint src/lint/bad-prompt.txt
 ```
 
 ## Publishing
 
-The three CLIs depend on `@sidhxntt/prompt-rules`, so it must be published
-first; a release of `@sidhxntt/vibe-lint` or `@sidhxntt/prompt-optimizer` will
-not install for anyone until it is on the registry.
+`vibe-coding-bundle` vendors the rule engine, so it has no release order to
+observe: `npm publish` builds first via `prepublishOnly` and ships `dist/`
+alone.
+
+The individually published CLIs still depend on `@sidhxntt/prompt-rules`, so
+that package must go to the registry first; a release of `@sidhxntt/vibe-lint`
+or `@sidhxntt/prompt-optimizer` will not install for anyone until it is there.
 
 ## License
 
-MIT License — see LICENSE.txt files in individual tool directories.
+MIT License — see LICENSE.txt at the root and in each tool directory under `src/`.
