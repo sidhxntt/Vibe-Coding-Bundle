@@ -1,6 +1,6 @@
 {
   "name": "vibe-coding-bundle",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Interactive CLI for prompt engineering, behind one command: lint prompts against 17 rules, rewrite weak ones with Claude, and squash verbose system prompts.",
   "keywords": [
     "cli",
