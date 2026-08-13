@@ -6,14 +6,14 @@ A collection of AI prompt engineering tools that lint, optimize, and compress pr
 ![JavaScript](https://img.shields.io/badge/javascript-%23323330.svg?style=flat&logo=javascript&logoColor=%23F7DF1E)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-> To know more about individual tools, see their own README.
+> Each tool keeps its own README under `src/<alias>/` — `src/lint`, `src/opt`, `src/squash`, `src/rules`.
 
 ## Features
 
 - **🔍 vibe-lint** — Flags weak, vague, and contradictory prompt instructions with 17 lint rules
 - **🎯 prompt-optimizer** — Rewrites weak prompts into tight, effective ones using the Claude API
 - **🗜️ token-squasher** — Compresses verbose system prompts into dense, token-efficient instructions
-- **📦 prompt-rules** — The shared rule engine both linting tools import
+- **📦 prompt-rules** — The shared rule engine both linting tools import, bundled as a library rather than a command
 - **Three input modes everywhere** — file arguments, piped stdin, or an interactive REPL
 - **CI-friendly** — `vibe-lint` exits non-zero on error-severity findings and speaks `--json`
 
@@ -24,7 +24,7 @@ A collection of AI prompt engineering tools that lint, optimize, and compress pr
 
 ## Installation
 
-### One command for all three tools
+### One command
 
 ```bash
 npm install -g vibe-coding-bundle
@@ -49,13 +49,9 @@ vibe squash system-prompt.txt    # compress
 `vibe-coding-bundle` is the same command, if you prefer the long name.
 `--no-splash` skips the opening animation.
 
-### Or install individual tools globally
-
-```bash
-npm install -g @sidhxntt/vibe-lint
-npm install -g @sidhxntt/prompt-optimizer
-npm install -g @sidhxntt/token-squasher
-```
+The three tools are not published separately and are not on your PATH: they ship
+inside this package and the launcher starts them. One command to install, one to
+remember.
 
 ### Or clone and run locally
 
@@ -82,7 +78,7 @@ export ANTHROPIC_API_KEY="your_api_key_here"
 
 ### Your prompt leaves your machine
 
-prompt-optimizer and token-squasher send the full prompt text verbatim to the
+vibe opt and token-squasher send the full prompt text verbatim to the
 Anthropic API. Nothing is redacted. Both print a one-time notice before their
 first request — do not paste API keys, credentials, or customer data.
 
@@ -91,25 +87,25 @@ first request — do not paste API keys, credentials, or customer data.
 Every tool accepts the same three input modes:
 
 ```bash
-tool file.txt file2.txt      # file arguments, processed non-interactively
-cat file.txt | tool          # piped stdin
-tool                         # no args on a TTY → interactive REPL
+vibe <tool> file.txt file2.txt   # file arguments, processed non-interactively
+cat file.txt | vibe <tool>       # piped stdin
+vibe <tool>                      # no args on a TTY → interactive REPL
 ```
 
 ### vibe-lint
 
 ```bash
-vibe-lint my-prompt.txt
-vibe-lint --json prompts/*.txt | jq '.[].score'
-vibe-lint --max-warnings 0 system-prompt.txt      # strict CI gate
-echo "You are a helpful AI assistant." | vibe-lint
+vibe lint my-prompt.txt
+vibe lint --json prompts/*.txt | jq '.[].score'
+vibe lint --max-warnings 0 system-prompt.txt      # strict CI gate
+echo "You are a helpful AI assistant." | vibe lint
 ```
 
-Real output from `vibe-lint --no-suggestions --quiet src/lint/bad-prompt.txt`
+Real output from `vibe lint --no-suggestions --quiet src/lint/bad-prompt.txt`
 (exit code 1):
 
 ```
-  vibe-lint v2.0.1  ─  src/lint/bad-prompt.txt
+  vibe lint v2.0.1  ─  src/lint/bad-prompt.txt
   Flagging weak, vague, and counterproductive prompt instructions
 
   ✖ error [E005] Reference to context not present in the prompt — model will hallucinate
@@ -130,8 +126,8 @@ Real output from `vibe-lint --no-suggestions --quiet src/lint/bad-prompt.txt`
 ### prompt-optimizer
 
 ```bash
-prompt-optimizer my-prompt.txt
-prompt-optimizer --force --model claude-opus-5 my-prompt.txt
+vibe opt my-prompt.txt
+vibe opt --force --model claude-opus-5 my-prompt.txt
 ```
 
 1. Analyzes the prompt with the shared rules
@@ -146,8 +142,8 @@ trips no regex still gets help.
 ### token-squasher
 
 ```bash
-token-squasher system-prompt.txt
-token-squasher --verbose --model claude-opus-5 system-prompt.txt
+vibe squash system-prompt.txt
+vibe squash --verbose --model claude-opus-5 system-prompt.txt
 ```
 
 Token statistics are on by default and come from the Anthropic `count_tokens`
@@ -176,7 +172,7 @@ Commands: `:stats` · `:verbose` · `:clear` · `:quit`
 | **chain-of-thought** | Reasoning suppressed | "just give me the answer" |
 | **vague-persona** | Personas with no domain | "act as an expert" |
 
-`vibe-lint --rules` prints the live list.
+`vibe lint --rules` prints the live list.
 
 ## Project structure
 
@@ -295,13 +291,13 @@ npm run build && node dist/index.js lint src/lint/bad-prompt.txt
 
 ## Publishing
 
-`vibe-coding-bundle` vendors the rule engine, so it has no release order to
-observe: `npm publish` builds first via `prepublishOnly` and ships `dist/`
-alone.
+There is one package. `npm publish` builds first via `prepublishOnly` and ships
+`dist/` alone — the launcher plus each tool's entry point and manifest, which the
+tools read their own versions from.
 
-The individually published CLIs still depend on `@sidhxntt/prompt-rules`, so
-that package must go to the registry first; a release of `@sidhxntt/vibe-lint`
-or `@sidhxntt/prompt-optimizer` will not install for anyone until it is there.
+The rule engine is vendored at `src/rules/`, so there is no release order to
+observe. An older `@sidhxntt/prompt-rules` exists on the registry from before the
+bundle; it is not a dependency of this package and nothing here installs it.
 
 ## License
 
